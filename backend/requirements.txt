@@ -1,0 +1,5 @@
+fastapi>=0.116,<1
+firebase-admin>=7,<8
+pydantic-settings>=2.10,<3
+python-multipart>=0.0.20,<1
+uvicorn[standard]>=0.35,<1

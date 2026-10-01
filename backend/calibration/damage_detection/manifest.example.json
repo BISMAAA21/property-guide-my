@@ -1,0 +1,30 @@
+{
+  "modelId": "openai/clip-vit-base-patch32",
+  "minimumConfidence": 0.4,
+  "examples": [
+    {
+      "image": "images/wall-crack-example.jpg",
+      "expectedClass": "wall_crack",
+      "source": "Record project-owned source or attribution URL",
+      "license": "Record licence or project-owned"
+    },
+    {
+      "image": "images/damp-stain-example.jpg",
+      "expectedClass": "water_or_damp_stain",
+      "source": "Record project-owned source or attribution URL",
+      "license": "Record licence or project-owned"
+    },
+    {
+      "image": "images/mold-example.jpg",
+      "expectedClass": "mold",
+      "source": "Record project-owned source or attribution URL",
+      "license": "Record licence or project-owned"
+    },
+    {
+      "image": "images/no-visible-damage-example.jpg",
+      "expectedClass": "no_visible_damage",
+      "source": "Record project-owned source or attribution URL",
+      "license": "Record licence or project-owned"
+    }
+  ]
+}

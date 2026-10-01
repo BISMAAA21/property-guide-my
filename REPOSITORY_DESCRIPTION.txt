@@ -1,0 +1,6 @@
+Recommended GitHub repository description:
+
+AI-assisted Android app helping international students in Malaysia evaluate properties, inspect damage, verify listing images, and simplify tenancy agreements.
+
+Suggested topics:
+flutter, dart, fastapi, python, firebase, pytorch, computer-vision, ocr, gemini, android, ai-ml

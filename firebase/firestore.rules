@@ -1,0 +1,788 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profilePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasProfile() {
+      return signedIn() && exists(profilePath());
+    }
+
+    function currentProfile() {
+      return get(profilePath()).data;
+    }
+
+    function isActive() {
+      return hasProfile() && currentProfile().status == 'active';
+    }
+
+    function hasRole(role) {
+      return isActive() && currentProfile().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isAgent() {
+      return hasRole('agent');
+    }
+
+    function validProperty(data) {
+      return data.keys().hasAll([
+               'agentId', 'propertyName', 'location', 'normalizedLocation',
+               'monthlyRent', 'bedrooms', 'bathrooms', 'propertyType',
+               'description', 'facilities', 'imageUrls', 'approvalStatus',
+               'ratingAverage', 'ratingCount', 'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'agentId', 'propertyName', 'location', 'normalizedLocation',
+               'monthlyRent', 'bedrooms', 'bathrooms', 'propertyType',
+               'description', 'facilities', 'imageUrls', 'approvalStatus',
+               'rejectionReason', 'ratingAverage', 'ratingCount',
+               'createdAt', 'updatedAt'
+             ])
+             && data.agentId is string
+             && data.propertyName is string
+             && data.propertyName.size() >= 3
+             && data.propertyName.size() <= 120
+             && data.location is string
+             && data.location.size() >= 3
+             && data.location.size() <= 160
+             && data.normalizedLocation is string
+             && data.normalizedLocation.size() >= 3
+             && data.normalizedLocation.size() <= 160
+             && data.monthlyRent is number
+             && data.monthlyRent > 0
+             && data.monthlyRent <= 100000
+             && data.bedrooms is int
+             && data.bedrooms >= 0
+             && data.bedrooms <= 20
+             && data.bathrooms is int
+             && data.bathrooms >= 1
+             && data.bathrooms <= 20
+             && data.propertyType in [
+               'room', 'studio', 'apartment', 'condominium', 'house'
+             ]
+             && data.description is string
+             && data.description.size() >= 20
+             && data.description.size() <= 5000
+             && data.facilities is list
+             && data.facilities.size() <= 20
+             && data.imageUrls is list
+             && data.imageUrls.size() <= 8
+             && data.approvalStatus in [
+               'draft', 'pending', 'approved', 'rejected', 'inactive'
+             ]
+             && data.ratingAverage is number
+             && data.ratingAverage >= 0
+             && data.ratingAverage <= 5
+             && data.ratingCount is int
+             && data.ratingCount >= 0;
+    }
+
+    function propertyPath(propertyId) {
+      return /databases/$(database)/documents/properties/$(propertyId);
+    }
+
+    function reviewPath(propertyId, studentId) {
+      return /databases/$(database)/documents/reviews/$(propertyId + '_' + studentId);
+    }
+
+    function validReview(data) {
+      return data.keys().hasAll([
+               'propertyId', 'studentId', 'studentName', 'rating', 'comment',
+               'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'propertyId', 'studentId', 'studentName', 'rating', 'comment',
+               'createdAt', 'updatedAt'
+             ])
+             && data.propertyId is string
+             && data.studentId is string
+             && data.studentName is string
+             && data.studentName.size() >= 2
+             && data.studentName.size() <= 120
+             && data.rating is int
+             && data.rating >= 1
+             && data.rating <= 5
+             && data.comment is string
+             && data.comment.size() >= 5
+             && data.comment.size() <= 1000;
+    }
+
+    function validStudentAggregateUpdate(propertyId) {
+      let targetReviewPath = reviewPath(propertyId, request.auth.uid);
+      let previousReviewExists = exists(targetReviewPath);
+      let previousRating = previousReviewExists
+        ? get(targetReviewPath).data.rating
+        : 0;
+      let nextReview = getAfter(targetReviewPath).data;
+      let nextCount = resource.data.ratingCount + (previousReviewExists ? 0 : 1);
+      let nextTotal = resource.data.ratingAverage * resource.data.ratingCount
+        - previousRating + nextReview.rating;
+      return hasRole('student')
+             && resource.data.approvalStatus == 'approved'
+             && existsAfter(targetReviewPath)
+             && nextReview.propertyId == propertyId
+             && nextReview.studentId == request.auth.uid
+             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+               'ratingAverage', 'ratingCount', 'updatedAt'
+             ])
+             && request.resource.data.ratingCount == nextCount
+             && request.resource.data.ratingAverage == nextTotal / nextCount;
+    }
+
+    function validAggregateAfterReviewWrite(propertyId, previousRating, nextRating, countDelta) {
+      let beforeProperty = get(propertyPath(propertyId)).data;
+      let afterProperty = getAfter(propertyPath(propertyId)).data;
+      let nextCount = beforeProperty.ratingCount + countDelta;
+      let nextTotal = beforeProperty.ratingAverage * beforeProperty.ratingCount
+        - previousRating + nextRating;
+      return nextCount > 0
+             && afterProperty.diff(beforeProperty).affectedKeys().hasOnly([
+               'ratingAverage', 'ratingCount', 'updatedAt'
+             ])
+             && afterProperty.ratingCount == nextCount
+             && afterProperty.ratingAverage == nextTotal / nextCount;
+    }
+
+    function validAggregateAfterReviewRemoval(propertyId, removedRating) {
+      let beforeProperty = get(propertyPath(propertyId)).data;
+      let afterProperty = getAfter(propertyPath(propertyId)).data;
+      let nextCount = beforeProperty.ratingCount - 1;
+      let nextTotal = beforeProperty.ratingAverage * beforeProperty.ratingCount
+        - removedRating;
+      return nextCount >= 0
+             && afterProperty.diff(beforeProperty).affectedKeys().hasOnly([
+               'ratingAverage', 'ratingCount', 'updatedAt'
+             ])
+             && afterProperty.ratingCount == nextCount
+             && afterProperty.ratingAverage == (nextCount == 0 ? 0 : nextTotal / nextCount);
+    }
+
+    function inspectionPath(inspectionId) {
+      return /databases/$(database)/documents/inspections/$(inspectionId);
+    }
+
+    function validInspectionResults(data) {
+      let results = data.results;
+      return results is map
+             && results.keys().hasAll([
+               'living_walls_ceiling', 'living_windows_doors',
+               'living_floor_furniture', 'bedroom_walls_ceiling',
+               'bedroom_windows_locks', 'bedroom_storage_furniture',
+               'bathroom_water_drainage', 'bathroom_toilet_leaks',
+               'bathroom_ventilation_mold', 'kitchen_sink_plumbing',
+               'kitchen_appliances', 'kitchen_storage_pests',
+               'utilities_water_electricity', 'utilities_sockets_lights',
+               'utilities_internet_cooling', 'safety_access_locks',
+               'safety_fire_equipment', 'safety_hazards_exits'
+             ])
+             && results.keys().hasOnly([
+               'living_walls_ceiling', 'living_windows_doors',
+               'living_floor_furniture', 'bedroom_walls_ceiling',
+               'bedroom_windows_locks', 'bedroom_storage_furniture',
+               'bathroom_water_drainage', 'bathroom_toilet_leaks',
+               'bathroom_ventilation_mold', 'kitchen_sink_plumbing',
+               'kitchen_appliances', 'kitchen_storage_pests',
+               'utilities_water_electricity', 'utilities_sockets_lights',
+               'utilities_internet_cooling', 'safety_access_locks',
+               'safety_fire_equipment', 'safety_hazards_exits'
+             ]);
+    }
+
+    function allInspectionResultsHaveValidState(data) {
+      let results = data.results;
+      let states = ['not_checked', 'satisfactory', 'concern', 'not_applicable'];
+      return results.living_walls_ceiling.state in states
+             && results.living_windows_doors.state in states
+             && results.living_floor_furniture.state in states
+             && results.bedroom_walls_ceiling.state in states
+             && results.bedroom_windows_locks.state in states
+             && results.bedroom_storage_furniture.state in states
+             && results.bathroom_water_drainage.state in states
+             && results.bathroom_toilet_leaks.state in states
+             && results.bathroom_ventilation_mold.state in states
+             && results.kitchen_sink_plumbing.state in states
+             && results.kitchen_appliances.state in states
+             && results.kitchen_storage_pests.state in states
+             && results.utilities_water_electricity.state in states
+             && results.utilities_sockets_lights.state in states
+             && results.utilities_internet_cooling.state in states
+             && results.safety_access_locks.state in states
+             && results.safety_fire_equipment.state in states
+             && results.safety_hazards_exits.state in states;
+    }
+
+    function validInspection(data) {
+      return data.keys().hasAll([
+               'studentId', 'propertyId', 'propertyName', 'checklistVersion',
+               'status', 'results', 'startedAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'studentId', 'propertyId', 'propertyName', 'checklistVersion',
+               'status', 'results', 'startedAt', 'updatedAt', 'completedAt'
+             ])
+             && data.studentId is string
+             && data.propertyId is string
+             && data.propertyName is string
+             && data.propertyName.size() >= 3
+             && data.propertyName.size() <= 120
+             && data.checklistVersion == '1.0.0'
+             && data.status in ['in_progress', 'completed']
+             && validInspectionResults(data)
+             && allInspectionResultsHaveValidState(data);
+    }
+
+    function allInspectionResultsAre(data, state) {
+      let results = data.results;
+      return results.living_walls_ceiling.state == state
+             && results.living_windows_doors.state == state
+             && results.living_floor_furniture.state == state
+             && results.bedroom_walls_ceiling.state == state
+             && results.bedroom_windows_locks.state == state
+             && results.bedroom_storage_furniture.state == state
+             && results.bathroom_water_drainage.state == state
+             && results.bathroom_toilet_leaks.state == state
+             && results.bathroom_ventilation_mold.state == state
+             && results.kitchen_sink_plumbing.state == state
+             && results.kitchen_appliances.state == state
+             && results.kitchen_storage_pests.state == state
+             && results.utilities_water_electricity.state == state
+             && results.utilities_sockets_lights.state == state
+             && results.utilities_internet_cooling.state == state
+             && results.safety_access_locks.state == state
+             && results.safety_fire_equipment.state == state
+             && results.safety_hazards_exits.state == state;
+    }
+
+    function allInspectionResultsAnswered(data) {
+      let results = data.results;
+      return results.living_walls_ceiling.state != 'not_checked'
+             && results.living_windows_doors.state != 'not_checked'
+             && results.living_floor_furniture.state != 'not_checked'
+             && results.bedroom_walls_ceiling.state != 'not_checked'
+             && results.bedroom_windows_locks.state != 'not_checked'
+             && results.bedroom_storage_furniture.state != 'not_checked'
+             && results.bathroom_water_drainage.state != 'not_checked'
+             && results.bathroom_toilet_leaks.state != 'not_checked'
+             && results.bathroom_ventilation_mold.state != 'not_checked'
+             && results.kitchen_sink_plumbing.state != 'not_checked'
+             && results.kitchen_appliances.state != 'not_checked'
+             && results.kitchen_storage_pests.state != 'not_checked'
+             && results.utilities_water_electricity.state != 'not_checked'
+             && results.utilities_sockets_lights.state != 'not_checked'
+             && results.utilities_internet_cooling.state != 'not_checked'
+             && results.safety_access_locks.state != 'not_checked'
+             && results.safety_fire_equipment.state != 'not_checked'
+             && results.safety_hazards_exits.state != 'not_checked';
+    }
+
+    function validVerificationGuidance(data) {
+      return (
+               data.similarityLevel == 'high'
+               && !data.possibleMismatch
+               && data.mismatchWarning == null
+               && data.guidance == 'The visit image appears reasonably similar to one approved listing image. Continue checking the address, surroundings, and property details in person.'
+             ) || (
+               data.similarityLevel == 'moderate'
+               && !data.possibleMismatch
+               && data.mismatchWarning == null
+               && data.guidance == 'The visit image has some visual similarity to an approved listing image, but differences remain. Compare fixed features and ask the agent to explain them.'
+             ) || (
+               data.similarityLevel == 'low'
+               && data.possibleMismatch
+               && data.mismatchWarning == 'Possible mismatch: the uploaded visit image has low visual similarity to every approved listing image.'
+               && data.guidance == 'The visit image looks visually different from the approved listing images. Pause and verify the exact unit, address, and listing details with the agent.'
+             );
+    }
+
+    function validVerificationReport(data, reportId) {
+      let property = get(propertyPath(data.propertyId)).data;
+      return data.keys().hasAll([
+               'studentId', 'propertyId', 'propertyName', 'visitImagePath',
+               'bestListingImageUrl', 'bestListingImageIndex',
+               'similarityScore', 'similarityLevel', 'possibleMismatch',
+               'mismatchWarning', 'guidance', 'disclaimer', 'modelId',
+               'createdAt'
+             ])
+             && data.keys().hasOnly([
+               'studentId', 'propertyId', 'propertyName', 'visitImagePath',
+               'bestListingImageUrl', 'bestListingImageIndex',
+               'similarityScore', 'similarityLevel', 'possibleMismatch',
+               'mismatchWarning', 'guidance', 'disclaimer', 'modelId',
+               'createdAt'
+             ])
+             && data.studentId is string
+             && data.propertyId is string
+             && data.propertyName is string
+             && data.visitImagePath is string
+             && data.visitImagePath.matches(
+               'students/' + request.auth.uid + '/verifications/' + reportId + '/[^/]+'
+             )
+             && data.bestListingImageUrl is string
+             && data.bestListingImageIndex is int
+             && data.bestListingImageIndex >= 0
+             && data.bestListingImageIndex < property.imageUrls.size()
+             && data.similarityScore is number
+             && data.similarityScore >= 0
+             && data.similarityScore <= 100
+             && data.similarityLevel in ['high', 'moderate', 'low']
+             && data.possibleMismatch is bool
+             && data.guidance is string
+             && data.disclaimer == 'AI-assisted guidance only; this does not guarantee that the property or listing is genuine.'
+             && data.modelId is string
+             && data.modelId.size() >= 1
+             && data.modelId.size() <= 200
+             && property.approvalStatus == 'approved'
+             && data.propertyName == property.propertyName
+             && data.bestListingImageUrl == property.imageUrls[data.bestListingImageIndex]
+             && validVerificationGuidance(data);
+    }
+
+    function validDamageGuidance(data) {
+      return data.disclaimer == 'AI-assisted observation only; this does not confirm damage or replace a qualified property inspection.'
+             && (
+               (
+                 data.damageClass == 'wall_crack'
+                 && data.recommendation == 'The model noticed visual features consistent with a possible wall crack. Inspect the area closely, ask about previous repairs, and seek a qualified professional if concerned.'
+               ) || (
+                 data.damageClass == 'water_or_damp_stain'
+                 && data.recommendation == 'The model noticed visual features consistent with possible water or damp staining. Check for moisture or leaks and ask the agent about the cause and repairs.'
+               ) || (
+                 data.damageClass == 'mold'
+                 && data.recommendation == 'The model noticed visual features consistent with possible mold growth. Avoid touching the area, ask about moisture treatment, and seek professional advice.'
+               ) || (
+                 data.damageClass == 'no_visible_damage'
+                 && data.recommendation == 'No supported visible defect stood out in this photo. Continue the guided inspection and obtain professional advice if anything still concerns you.'
+               )
+             );
+    }
+
+    function validDamageSource(data, reportId) {
+      return (
+               data.sourceType == 'upload'
+               && data.inspectionId == null
+               && data.checkId == null
+               && data.imagePath.matches(
+                 'students/' + request.auth.uid + '/damage/' + reportId + '/[^/]+'
+               )
+               && exists(propertyPath(data.propertyId))
+               && get(propertyPath(data.propertyId)).data.approvalStatus == 'approved'
+             ) || (
+               data.sourceType == 'inspection'
+               && data.inspectionId is string
+               && data.checkId is string
+               && exists(inspectionPath(data.inspectionId))
+               && get(inspectionPath(data.inspectionId)).data.studentId == request.auth.uid
+               && get(inspectionPath(data.inspectionId)).data.propertyId == data.propertyId
+               && get(inspectionPath(data.inspectionId)).data.status == 'completed'
+               && get(inspectionPath(data.inspectionId)).data.results.keys().hasAny([data.checkId])
+               && get(inspectionPath(data.inspectionId)).data.results[data.checkId].state == 'concern'
+               && get(inspectionPath(data.inspectionId)).data.results[data.checkId].concernImagePath == data.imagePath
+             );
+    }
+
+    function validDamageReport(data, reportId) {
+      return data.keys().hasAll([
+               'studentId', 'propertyId', 'imagePath', 'sourceType',
+               'inspectionId', 'checkId', 'damageClass', 'modelScore',
+               'boundingBox', 'recommendation', 'disclaimer', 'modelId',
+               'createdAt'
+             ])
+             && data.keys().hasOnly([
+               'studentId', 'propertyId', 'imagePath', 'sourceType',
+               'inspectionId', 'checkId', 'damageClass', 'modelScore',
+               'boundingBox', 'recommendation', 'disclaimer', 'modelId',
+               'createdAt'
+             ])
+             && data.studentId is string
+             && data.propertyId is string
+             && data.imagePath is string
+             && data.sourceType in ['upload', 'inspection']
+             && data.damageClass in [
+               'wall_crack', 'water_or_damp_stain', 'mold', 'no_visible_damage'
+             ]
+             && data.modelScore is number
+             && data.modelScore >= 0
+             && data.modelScore <= 1
+             && data.boundingBox == null
+             && data.recommendation is string
+             && data.disclaimer is string
+             && data.modelId is string
+             && data.modelId.size() >= 1
+             && data.modelId.size() <= 200
+             && validDamageSource(data, reportId)
+             && validDamageGuidance(data);
+    }
+
+    function validAgreementClause(clause, expectedId) {
+      return clause is map
+             && clause.keys().hasAll([
+               'id', 'title', 'original', 'simplified', 'importantPoints'
+             ])
+             && clause.keys().hasOnly([
+               'id', 'title', 'original', 'simplified', 'importantPoints'
+             ])
+             && clause.id == expectedId
+             && clause.title is string
+             && clause.title.size() >= 1
+             && clause.title.size() <= 100
+             && clause.original is string
+             && clause.original.size() >= 1
+             && clause.simplified is string
+             && clause.simplified.size() >= 1
+             && clause.simplified != clause.original
+             && clause.importantPoints is list
+             && clause.importantPoints.size() >= 1
+             && clause.importantPoints.size() <= 5;
+    }
+
+    function validAgreementReport(data, agreementId) {
+      return data.keys().hasAll([
+               'studentId', 'documentPath', 'filename', 'extractionMethod',
+               'clauses', 'disclaimer', 'modelId', 'processingStatus',
+               'createdAt', 'updatedAt'
+             ])
+             && data.keys().hasOnly([
+               'studentId', 'documentPath', 'filename', 'extractionMethod',
+               'clauses', 'disclaimer', 'modelId', 'processingStatus',
+               'createdAt', 'updatedAt'
+             ])
+             && data.studentId is string
+             && data.studentId == request.auth.uid
+             && data.documentPath == 'students/' + request.auth.uid
+               + '/agreements/' + agreementId + '/document.pdf'
+             && data.filename is string
+             && data.filename.size() >= 5
+             && data.filename.size() <= 100
+             && data.filename.matches('.*[.]pdf')
+             && data.extractionMethod in ['embedded_text', 'ocr', 'mixed']
+             && data.clauses is list
+             && data.clauses.size() >= 1
+             && data.clauses.size() <= 100
+             && validAgreementClause(data.clauses[0], 'clause-1')
+             && data.disclaimer == 'This is simplified legal information, not legal advice. Verify important terms with a qualified professional.'
+             && data.modelId is string
+             && data.modelId.size() >= 1
+             && data.modelId.size() <= 200
+             && data.processingStatus == 'completed';
+    }
+
+    match /users/{uid} {
+      // A user may always read their own account state so the app can explain a
+      // disabled or incomplete account. All other application data requires active status.
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow get: if isActive()
+                 && resource.data.role == 'agent'
+                 && resource.data.status == 'active';
+      allow list: if isAdmin();
+
+      // Self-registration creates students only. Admin SDK provisioning bypasses
+      // client rules for agent and administrator accounts.
+      allow create: if signedIn()
+                    && request.auth.uid == uid
+                    && request.resource.data.keys().hasOnly([
+                      'name', 'email', 'role', 'status', 'createdAt', 'updatedAt'
+                    ])
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() >= 2
+                    && request.resource.data.email == request.auth.token.email
+                    && request.resource.data.role == 'student'
+                    && request.resource.data.status == 'active';
+
+      // Users can update safe profile fields only; neither role nor status can
+      // be promoted from a client. Agents may maintain their professional fields.
+      // Active admins may change another account's status only.
+      allow update: if (
+          request.auth.uid == uid
+          && isActive()
+          && (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'updatedAt'
+            ]) || (
+              currentProfile().role == 'agent'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'name', 'agencyName', 'phone', 'registrationNumber', 'updatedAt'
+              ])
+              && request.resource.data.agencyName is string
+              && request.resource.data.agencyName.size() >= 2
+              && request.resource.data.agencyName.size() <= 160
+              && request.resource.data.phone is string
+              && request.resource.data.phone.size() >= 7
+              && request.resource.data.phone.size() <= 24
+              && request.resource.data.registrationNumber is string
+              && request.resource.data.registrationNumber.size() >= 3
+              && request.resource.data.registrationNumber.size() <= 80
+            )
+          )
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 2
+        ) || (
+          isAdmin()
+          && request.auth.uid != uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'updatedAt'
+          ])
+          && request.resource.data.status in ['active', 'disabled']
+        );
+
+      allow delete: if false;
+    }
+
+    match /properties/{propertyId} {
+      allow read: if isActive()
+                  && (
+                    resource.data.approvalStatus == 'approved'
+                    || isAdmin()
+                    || (isAgent() && resource.data.agentId == request.auth.uid)
+                  );
+
+      allow create: if isAgent()
+                    && validProperty(request.resource.data)
+                    && request.resource.data.agentId == request.auth.uid
+                    && request.resource.data.approvalStatus == 'draft'
+                    && request.resource.data.imageUrls.size() == 0
+                    && request.resource.data.ratingAverage == 0
+                    && request.resource.data.ratingCount == 0
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time
+                    && !request.resource.data.keys().hasAny(['rejectionReason']);
+
+      allow update: if validProperty(request.resource.data)
+                    && request.resource.data.agentId == resource.data.agentId
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.updatedAt == request.time
+                    && (
+                      (
+                        isAgent()
+                        && request.resource.data.ratingAverage == resource.data.ratingAverage
+                        && request.resource.data.ratingCount == resource.data.ratingCount
+                        && resource.data.agentId == request.auth.uid
+                        && resource.data.approvalStatus in ['draft', 'rejected']
+                        && request.resource.data.approvalStatus == resource.data.approvalStatus
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'propertyName', 'location', 'normalizedLocation',
+                          'monthlyRent', 'bedrooms', 'bathrooms', 'propertyType',
+                          'description', 'facilities', 'imageUrls', 'updatedAt'
+                        ])
+                      ) || (
+                        isAgent()
+                        && request.resource.data.ratingAverage == resource.data.ratingAverage
+                        && request.resource.data.ratingCount == resource.data.ratingCount
+                        && resource.data.agentId == request.auth.uid
+                        && resource.data.approvalStatus in ['draft', 'rejected']
+                        && request.resource.data.approvalStatus == 'pending'
+                        && request.resource.data.imageUrls.size() >= 1
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'approvalStatus', 'rejectionReason', 'updatedAt'
+                        ])
+                        && !request.resource.data.keys().hasAny(['rejectionReason'])
+                      ) || (
+                        isAgent()
+                        && request.resource.data.ratingAverage == resource.data.ratingAverage
+                        && request.resource.data.ratingCount == resource.data.ratingCount
+                        && resource.data.agentId == request.auth.uid
+                        && resource.data.approvalStatus == 'approved'
+                        && request.resource.data.approvalStatus == 'inactive'
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'approvalStatus', 'updatedAt'
+                        ])
+                      ) || (
+                        isAdmin()
+                        && request.resource.data.ratingAverage == resource.data.ratingAverage
+                        && request.resource.data.ratingCount == resource.data.ratingCount
+                        && resource.data.approvalStatus == 'pending'
+                        && request.resource.data.approvalStatus == 'approved'
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'approvalStatus', 'rejectionReason', 'updatedAt'
+                        ])
+                        && !request.resource.data.keys().hasAny(['rejectionReason'])
+                      ) || (
+                        isAdmin()
+                        && request.resource.data.ratingAverage == resource.data.ratingAverage
+                        && request.resource.data.ratingCount == resource.data.ratingCount
+                        && resource.data.approvalStatus == 'pending'
+                        && request.resource.data.approvalStatus == 'rejected'
+                        && request.resource.data.rejectionReason is string
+                        && request.resource.data.rejectionReason.size() >= 5
+                        && request.resource.data.rejectionReason.size() <= 500
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'approvalStatus', 'rejectionReason', 'updatedAt'
+                        ])
+                      ) || (
+                        validStudentAggregateUpdate(propertyId)
+                      ) || (
+                        isAdmin()
+                        && request.resource.data.approvalStatus == resource.data.approvalStatus
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                          'ratingAverage', 'ratingCount', 'updatedAt'
+                        ])
+                      )
+                    );
+
+      allow delete: if isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      // A review transaction must read its deterministic target before deciding
+      // whether to create or update it. Reading a missing document reveals no
+      // stored data; existing documents still use the visibility rule below.
+      allow get: if (hasRole('student') || isAdmin())
+                 && !exists(/databases/$(database)/documents/reviews/$(reviewId));
+
+      allow read: if isActive()
+                  && exists(propertyPath(resource.data.propertyId))
+                  && (
+                    isAdmin()
+                    || get(propertyPath(resource.data.propertyId)).data.approvalStatus == 'approved'
+                    || (
+                      isAgent()
+                      && get(propertyPath(resource.data.propertyId)).data.agentId == request.auth.uid
+                    )
+                  );
+
+      allow create: if hasRole('student')
+                    && validReview(request.resource.data)
+                    && reviewId == request.resource.data.propertyId + '_' + request.auth.uid
+                    && request.resource.data.studentId == request.auth.uid
+                    && request.resource.data.studentName == currentProfile().name
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time
+                    && exists(propertyPath(request.resource.data.propertyId))
+                    && get(propertyPath(request.resource.data.propertyId)).data.approvalStatus == 'approved'
+                    && validAggregateAfterReviewWrite(
+                      request.resource.data.propertyId,
+                      0,
+                      request.resource.data.rating,
+                      1
+                    );
+
+      allow update: if hasRole('student')
+                    && resource.data.studentId == request.auth.uid
+                    && validReview(request.resource.data)
+                    && request.resource.data.propertyId == resource.data.propertyId
+                    && request.resource.data.studentId == resource.data.studentId
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.studentName == currentProfile().name
+                    && request.resource.data.updatedAt == request.time
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'studentName', 'rating', 'comment', 'updatedAt'
+                    ])
+                    && get(propertyPath(resource.data.propertyId)).data.approvalStatus == 'approved'
+                    && validAggregateAfterReviewWrite(
+                      resource.data.propertyId,
+                      resource.data.rating,
+                      request.resource.data.rating,
+                      0
+                    );
+
+      allow delete: if isAdmin()
+                    && (
+                      !existsAfter(propertyPath(resource.data.propertyId))
+                      || validAggregateAfterReviewRemoval(
+                        resource.data.propertyId,
+                        resource.data.rating
+                      )
+                    );
+    }
+
+    match /inspections/{inspectionId} {
+      // The deterministic start transaction must be able to confirm that its
+      // private target is absent before creating it.
+      allow get: if hasRole('student')
+                 && !exists(inspectionPath(inspectionId));
+
+      allow read: if hasRole('student')
+                  && resource.data.studentId == request.auth.uid;
+
+      allow create: if hasRole('student')
+                    && validInspection(request.resource.data)
+                    && inspectionId == request.resource.data.propertyId + '_' + request.auth.uid
+                    && request.resource.data.studentId == request.auth.uid
+                    && exists(propertyPath(request.resource.data.propertyId))
+                    && get(propertyPath(request.resource.data.propertyId)).data.approvalStatus == 'approved'
+                    && request.resource.data.propertyName == get(propertyPath(request.resource.data.propertyId)).data.propertyName
+                    && request.resource.data.status == 'in_progress'
+                    && allInspectionResultsAre(request.resource.data, 'not_checked')
+                    && request.resource.data.startedAt == request.time
+                    && request.resource.data.updatedAt == request.time
+                    && !request.resource.data.keys().hasAny(['completedAt']);
+
+      allow update: if hasRole('student')
+                    && resource.data.studentId == request.auth.uid
+                    && resource.data.status == 'in_progress'
+                    && validInspection(request.resource.data)
+                    && request.resource.data.studentId == resource.data.studentId
+                    && request.resource.data.propertyId == resource.data.propertyId
+                    && request.resource.data.propertyName == resource.data.propertyName
+                    && request.resource.data.checklistVersion == resource.data.checklistVersion
+                    && request.resource.data.startedAt == resource.data.startedAt
+                    && request.resource.data.updatedAt == request.time
+                    && (
+                      (
+                        request.resource.data.status == 'in_progress'
+                        && !request.resource.data.keys().hasAny(['completedAt'])
+                      ) || (
+                        request.resource.data.status == 'completed'
+                        && allInspectionResultsAnswered(request.resource.data)
+                        && request.resource.data.completedAt == request.time
+                      )
+                    );
+
+      allow delete: if false;
+    }
+
+    match /verificationReports/{reportId} {
+      allow read: if hasRole('student')
+                  && resource.data.studentId == request.auth.uid;
+
+      allow create: if hasRole('student')
+                    && request.resource.data.studentId == request.auth.uid
+                    && exists(propertyPath(request.resource.data.propertyId))
+                    && validVerificationReport(request.resource.data, reportId)
+                    && request.resource.data.createdAt == request.time;
+
+      // Reports are immutable evidence. A later retention feature can add a
+      // coordinated document/image deletion path with dedicated tests.
+      allow update, delete: if false;
+    }
+
+    match /damageReports/{reportId} {
+      allow read: if hasRole('student')
+                  && resource.data.studentId == request.auth.uid;
+
+      allow create: if hasRole('student')
+                    && request.resource.data.studentId == request.auth.uid
+                    && validDamageReport(request.resource.data, reportId)
+                    && request.resource.data.createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    match /agreements/{agreementId} {
+      allow read: if hasRole('student')
+                  && resource.data.studentId == request.auth.uid;
+
+      allow create: if hasRole('student')
+                    && validAgreementReport(request.resource.data, agreementId)
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.updatedAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // Unknown feature collections remain closed until their owning sprint adds
+    // resource-specific ownership and role rules plus emulator coverage.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,206 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Live projects require the Firebase Rules Firestore Service Agent IAM
+    // grant because these authorization checks read Firestore documents.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentProfile() {
+      return firestore.get(
+        /databases/(default)/documents/users/$(request.auth.uid)
+      ).data;
+    }
+
+    function propertyPath(propertyId) {
+      return /databases/(default)/documents/properties/$(propertyId);
+    }
+
+    function propertyData(propertyId) {
+      return firestore.get(propertyPath(propertyId)).data;
+    }
+
+    function inspectionPath(inspectionId) {
+      return /databases/(default)/documents/inspections/$(inspectionId);
+    }
+
+    function inspectionData(inspectionId) {
+      return firestore.get(inspectionPath(inspectionId)).data;
+    }
+
+    function isActiveSelf(uid) {
+      let profile = currentProfile();
+      return signedIn()
+             && request.auth.uid == uid
+             && profile.status == 'active';
+    }
+
+    function canReadProfile(uid) {
+      let profile = currentProfile();
+      return signedIn()
+             && (
+               request.auth.uid == uid
+               || (profile.status == 'active' && profile.role == 'admin')
+             );
+    }
+
+    function canDeleteProfile(uid) {
+      let profile = currentProfile();
+      return signedIn()
+             && profile.status == 'active'
+             && (request.auth.uid == uid || profile.role == 'admin');
+    }
+
+    function canReadListing(agentId, propertyId) {
+      let profile = currentProfile();
+      let property = propertyData(propertyId);
+      return signedIn()
+             && profile.status == 'active'
+             && (
+               property.approvalStatus == 'approved'
+               || profile.role == 'admin'
+               || (
+                 profile.role == 'agent'
+                 && request.auth.uid == agentId
+                 && property.agentId == request.auth.uid
+               )
+             );
+    }
+
+    function canCreateListing(agentId, propertyId) {
+      let profile = currentProfile();
+      let property = propertyData(propertyId);
+      return signedIn()
+             && profile.status == 'active'
+             && profile.role == 'agent'
+             && request.auth.uid == agentId
+             && property.agentId == request.auth.uid
+             && property.approvalStatus in ['draft', 'rejected'];
+    }
+
+    function canDeleteListing(agentId, propertyId) {
+      let profile = currentProfile();
+      return signedIn()
+             && profile.status == 'active'
+             && (
+               profile.role == 'admin'
+               || (
+                 profile.role == 'agent'
+                 && request.auth.uid == agentId
+                 && ownsEditableListing(propertyId)
+               )
+             );
+    }
+
+    function ownsEditableListing(propertyId) {
+      let property = propertyData(propertyId);
+      return property.agentId == request.auth.uid
+             && property.approvalStatus in ['draft', 'rejected'];
+    }
+
+    function canAccessInspection(studentId, inspectionId, requireInProgress) {
+      let profile = currentProfile();
+      let inspection = inspectionData(inspectionId);
+      return signedIn()
+             && profile.status == 'active'
+             && profile.role == 'student'
+             && request.auth.uid == studentId
+             && inspection.studentId == request.auth.uid
+             && (!requireInProgress || inspection.status == 'in_progress');
+    }
+
+    function canCreateStudentPropertyReport(studentId, propertyId) {
+      let profile = currentProfile();
+      let property = propertyData(propertyId);
+      return signedIn()
+             && profile.status == 'active'
+             && profile.role == 'student'
+             && request.auth.uid == studentId
+             && property.approvalStatus == 'approved';
+    }
+
+    function isActiveStudentOwner(studentId) {
+      let profile = currentProfile();
+      return signedIn()
+             && profile.status == 'active'
+             && profile.role == 'student'
+             && request.auth.uid == studentId;
+    }
+
+    match /users/{uid}/profile/{imageId} {
+      allow read: if canReadProfile(uid);
+      allow create, update: if isActiveSelf(uid)
+                            && request.resource.size < 5 * 1024 * 1024
+                            && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if canDeleteProfile(uid);
+    }
+
+    match /properties/{agentId}/{propertyId}/listing/{imageId} {
+      allow read: if canReadListing(agentId, propertyId);
+      allow create: if canCreateListing(agentId, propertyId)
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update: if false;
+      allow delete: if canDeleteListing(agentId, propertyId);
+    }
+
+    match /students/{studentId}/inspections/{inspectionId}/{imageId} {
+      allow read: if canAccessInspection(studentId, inspectionId, false);
+      allow create: if canAccessInspection(studentId, inspectionId, true)
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update: if false;
+      allow delete: if canAccessInspection(studentId, inspectionId, true);
+    }
+
+    match /students/{studentId}/verifications/{reportId}/{imageId} {
+      allow read: if isActiveStudentOwner(studentId);
+      allow create: if request.resource.metadata.ownerId == request.auth.uid
+                    && request.resource.metadata.reportId == reportId
+                    && request.resource.metadata.propertyId is string
+                    && canCreateStudentPropertyReport(
+                      studentId,
+                      request.resource.metadata.propertyId
+                    )
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update: if false;
+      allow delete: if isActiveStudentOwner(studentId);
+    }
+
+    match /students/{studentId}/damage/{reportId}/{imageId} {
+      allow read: if isActiveStudentOwner(studentId);
+      allow create: if request.resource.metadata.ownerId == request.auth.uid
+                    && request.resource.metadata.reportId == reportId
+                    && request.resource.metadata.propertyId is string
+                    && canCreateStudentPropertyReport(
+                      studentId,
+                      request.resource.metadata.propertyId
+                    )
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update: if false;
+      allow delete: if isActiveStudentOwner(studentId);
+    }
+
+    match /students/{studentId}/agreements/{agreementId}/{documentId} {
+      allow read: if isActiveStudentOwner(studentId);
+      allow create: if isActiveStudentOwner(studentId)
+                    && documentId == 'document.pdf'
+                    && request.resource.metadata.ownerId == request.auth.uid
+                    && request.resource.metadata.agreementId == agreementId
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType == 'application/pdf';
+      allow update: if false;
+      allow delete: if isActiveStudentOwner(studentId);
+    }
+
+    // Unknown feature uploads remain closed until their owning sprint adds
+    // tested owner and resource-path authorization.
+    match /{object=**} {
+      allow read, write: if false;
+    }
+  }
+}

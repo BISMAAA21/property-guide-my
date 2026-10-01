@@ -1,0 +1,6 @@
+# Copy this file to key.properties, which is ignored by Git.
+# Resolve storeFile relative to mobile/android or use an absolute local path.
+storeFile=C:/secure/path/property-guidance-release.jks
+storePassword=replace-with-owner-secret
+keyAlias=property-guidance
+keyPassword=replace-with-owner-secret

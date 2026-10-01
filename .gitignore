@@ -1,0 +1,77 @@
+# Secrets and private configuration
+.env
+.env.*
+!.env.example
+**/google-services.json
+**/GoogleService-Info.plist
+**/local.properties
+**/*.iml
+**/.metadata
+**/firebase-adminsdk*.json
+**/service-account*.json
+**/*credentials*.json
+**/*secret*.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/key.properties
+**/*app-check*token*
+**/GeneratedPluginRegistrant.java
+
+# Flutter / Dart
+**/.dart_tool/
+**/.packages
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/build/
+**/coverage/
+**/*.apk
+**/*.aab
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+**/venv/
+**/dist/
+**/*.egg-info/
+
+# JavaScript / Node
+**/node_modules/
+**/.npm/
+**/.pnpm-store/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local model and OCR caches
+**/.cache/
+**/hf-cache/
+**/model-cache/
+
+# Local calibration fixtures and generated evaluation output
+**/calibration/**/images/
+**/calibration/**/manifest.local.json
+**/calibration/**/report.local.json
+**/calibration/**/evidence.local.md
+**/calibration/agreements/documents/*.pdf
+
+# Academic/submission and generated presentation artifacts
+presentation-build/
+presentation-output/
+chapter6-qa/
+.chart-data-*/
+submission-artifacts/
+academic-artifacts/
+*.pptx
+emulator-*.png

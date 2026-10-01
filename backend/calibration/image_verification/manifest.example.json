@@ -1,0 +1,20 @@
+{
+  "modelId": "openai/clip-vit-base-patch32",
+  "pairs": [
+    {
+      "visitImage": "images/high-same-room-visit.jpg",
+      "listingImage": "images/high-same-room-listing.jpg",
+      "expectedLevel": "high"
+    },
+    {
+      "visitImage": "images/moderate-changed-view-visit.jpg",
+      "listingImage": "images/moderate-changed-view-listing.jpg",
+      "expectedLevel": "moderate"
+    },
+    {
+      "visitImage": "images/low-unrelated-room-visit.jpg",
+      "listingImage": "images/low-unrelated-room-listing.jpg",
+      "expectedLevel": "low"
+    }
+  ]
+}
